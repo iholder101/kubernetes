@@ -20,6 +20,9 @@ limitations under the License.
 package kuberuntime
 
 import (
+	"fmt"
+	cadvisorv1 "github.com/google/cadvisor/info/v1"
+	kubeapiqos "k8s.io/kubernetes/pkg/apis/core/v1/helper/qos"
 	"math"
 	"os"
 	"strconv"
@@ -98,8 +101,15 @@ func (m *kubeGenericRuntimeManager) generateLinuxContainerResources(pod *v1.Pod,
 
 	lcr.HugepageLimits = GetHugepageLimitsFromResources(container.Resources)
 
-	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.NodeSwap) {
-		// TODO: implement in further commits
+	if lcr.Unified == nil {
+		lcr.Unified = map[string]string{}
+	}
+
+	if swapConfigurationHelper := newSwapConfigurationHelper(*m.machineInfo); utilfeature.DefaultFeatureGate.Enabled(kubefeatures.NodeSwap) {
+		// Non-burstable pods would be defined with no swap access
+		swapConfigurationHelper.ConfigureSwapForBurstablePods(lcr, pod, container)
+	} else {
+		swapConfigurationHelper.ConfigureNoSwap(lcr)
 	}
 
 	// Set memory.min and memory.high to enforce MemoryQoS
@@ -283,4 +293,61 @@ func toKubeContainerResources(statusResources *runtimeapi.ContainerResources) *k
 		}
 	}
 	return cStatusResources
+}
+
+var isCgroup2UnifiedMode = func() bool {
+	return libcontainercgroups.IsCgroup2UnifiedMode()
+}
+
+type swapConfigurationHelper struct {
+	isCgroup2UnifiedMode bool
+	machineInfo          cadvisorv1.MachineInfo
+}
+
+func newSwapConfigurationHelper(machineInfo cadvisorv1.MachineInfo) *swapConfigurationHelper {
+	return &swapConfigurationHelper{isCgroup2UnifiedMode: isCgroup2UnifiedMode(), machineInfo: machineInfo}
+}
+
+func (m swapConfigurationHelper) ConfigureSwapForBurstablePods(lcr *runtimeapi.LinuxContainerResources, pod *v1.Pod, container *v1.Container) {
+	podQos := kubeapiqos.GetPodQOS(pod)
+	if podQos != v1.PodQOSBurstable {
+		m.ConfigureNoSwap(lcr)
+		return
+	}
+
+	containerMemoryRequest := container.Resources.Requests.Memory()
+	if containerMemoryRequest == nil {
+		m.ConfigureNoSwap(lcr)
+		return
+	}
+
+	totalPodMemory := resource.Quantity{}
+
+	for _, container := range pod.Spec.Containers {
+		memoryRequest := container.Resources.Requests.Memory()
+		if memoryRequest != nil {
+			totalPodMemory.Add(*container.Resources.Requests.Memory())
+		}
+	}
+
+	requestedMemoryProportion := float64(containerMemoryRequest.Value()) / float64(totalPodMemory.Value())
+	swapMemoryProportion := float64(m.machineInfo.SwapCapacity) / float64(m.machineInfo.MemoryCapacity)
+
+	swapLimit := int64(requestedMemoryProportion * swapMemoryProportion * float64(containerMemoryRequest.Value()))
+	m.configureSwap(lcr, swapLimit)
+}
+
+func (m swapConfigurationHelper) ConfigureNoSwap(lcr *runtimeapi.LinuxContainerResources) {
+	m.configureSwap(lcr, 0)
+}
+
+func (m swapConfigurationHelper) configureSwap(lcr *runtimeapi.LinuxContainerResources, swapMemory int64) {
+	if m.isCgroup2UnifiedMode {
+		lcr.Unified[cm.Cgroup2MaxSwapFilename] = fmt.Sprintf("%d", swapMemory)
+	} else {
+		// memorySwapLimit = total permitted memory+swap; if equal to memory limit, => 0 swap above memory limit
+		// Some swapping is still possible.
+		// Note that if memory limit is 0, memory swap limit is ignored.
+		lcr.MemorySwapLimitInBytes = lcr.MemoryLimitInBytes + swapMemory
+	}
 }
