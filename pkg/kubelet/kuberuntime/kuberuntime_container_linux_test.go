@@ -21,6 +21,8 @@ package kuberuntime
 
 import (
 	"context"
+	"fmt"
+	"k8s.io/kubernetes/pkg/kubelet/cm"
 	"math"
 	"os"
 	"reflect"
@@ -38,7 +40,6 @@ import (
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/kubernetes/pkg/features"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
-	kubelettypes "k8s.io/kubernetes/pkg/kubelet/types"
 )
 
 func makeExpectedConfig(m *kubeGenericRuntimeManager, pod *v1.Pod, containerIndex int, enforceMemoryQoS bool) *runtimeapi.ContainerConfig {
@@ -634,96 +635,6 @@ func TestGenerateLinuxContainerConfigNamespaces(t *testing.T) {
 	}
 }
 
-func TestGenerateLinuxContainerConfigSwap(t *testing.T) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.NodeSwap, true)()
-	_, _, m, err := createTestRuntimeManager()
-	if err != nil {
-		t.Fatalf("error creating test RuntimeManager: %v", err)
-	}
-	m.machineInfo.MemoryCapacity = 1000000
-	containerName := "test"
-
-	for _, tc := range []struct {
-		name        string
-		swapSetting string
-		pod         *v1.Pod
-		expected    int64
-	}{
-		{
-			name: "config unset, memory limit set",
-			// no swap setting
-			pod: &v1.Pod{
-				Spec: v1.PodSpec{
-					Containers: []v1.Container{{
-						Name: containerName,
-						Resources: v1.ResourceRequirements{
-							Limits: v1.ResourceList{
-								"memory": resource.MustParse("1000"),
-							},
-							Requests: v1.ResourceList{
-								"memory": resource.MustParse("1000"),
-							},
-						},
-					}},
-				},
-			},
-			expected: 1000,
-		},
-		{
-			name: "config unset, no memory limit",
-			// no swap setting
-			pod: &v1.Pod{
-				Spec: v1.PodSpec{
-					Containers: []v1.Container{
-						{Name: containerName},
-					},
-				},
-			},
-			expected: 0,
-		},
-		{
-			// Note: behaviour will be the same as previous two cases
-			name:        "config set to LimitedSwap, memory limit set",
-			swapSetting: kubelettypes.LimitedSwap,
-			pod: &v1.Pod{
-				Spec: v1.PodSpec{
-					Containers: []v1.Container{{
-						Name: containerName,
-						Resources: v1.ResourceRequirements{
-							Limits: v1.ResourceList{
-								"memory": resource.MustParse("1000"),
-							},
-							Requests: v1.ResourceList{
-								"memory": resource.MustParse("1000"),
-							},
-						},
-					}},
-				},
-			},
-			expected: 1000,
-		},
-		{
-			name:        "UnlimitedSwap enabled",
-			swapSetting: kubelettypes.UnlimitedSwap,
-			pod: &v1.Pod{
-				Spec: v1.PodSpec{
-					Containers: []v1.Container{
-						{Name: containerName},
-					},
-				},
-			},
-			expected: -1,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m.memorySwapBehavior = tc.swapSetting
-			actual, err := m.generateLinuxContainerConfig(&tc.pod.Spec.Containers[0], tc.pod, nil, "", nil, false)
-			assert.NoError(t, err)
-			assert.Equal(t, tc.expected, actual.Resources.MemorySwapLimitInBytes, "memory swap config for %s", tc.name)
-		})
-	}
-}
-
 func TestGenerateLinuxContainerResources(t *testing.T) {
 	_, _, m, err := createTestRuntimeManager()
 	assert.NoError(t, err)
@@ -875,6 +786,13 @@ func TestGenerateLinuxContainerResources(t *testing.T) {
 			if tc.scalingFg {
 				defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScaling, true)()
 			}
+
+			isCgroup2UnifiedMode = func() bool {
+				return false
+			}
+			tc.expected.MemorySwapLimitInBytes = tc.expected.MemoryLimitInBytes
+			tc.expected.Unified = map[string]string{}
+
 			pod.Spec.Containers[0].Resources = v1.ResourceRequirements{Limits: tc.limits, Requests: tc.requests}
 			if len(tc.cStatus) > 0 {
 				pod.Status.ContainerStatuses = tc.cStatus
@@ -887,4 +805,182 @@ func TestGenerateLinuxContainerResources(t *testing.T) {
 		})
 	}
 	//TODO(vinaykul,InPlacePodVerticalScaling): Add unit tests for cgroup v1 & v2
+}
+
+func TestGenerateLinuxContainerResourcesWithSwap(t *testing.T) {
+	_, _, m, err := createTestRuntimeManager()
+	assert.NoError(t, err)
+	m.machineInfo.MemoryCapacity = 42949672960 // 40Gb == 40 * 1024^3
+	m.machineInfo.SwapCapacity = 5368709120    // 5Gb == 5 * 1024^3
+
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:       "12345678",
+			Name:      "foo",
+			Namespace: "bar",
+		},
+		Spec: v1.PodSpec{
+			Containers: []v1.Container{
+				{
+					Name: "c1",
+					//Image: "busybox",
+				},
+				{
+					Name: "c2",
+					//Image: "busybox",
+				},
+			},
+		},
+		Status: v1.PodStatus{},
+	}
+
+	type CgroupVersion string
+	const (
+		cgroupV1 CgroupVersion = "v1"
+		cgroupV2 CgroupVersion = "v2"
+	)
+
+	expectNoSwap := func(cgroupVersion CgroupVersion, resources ...*runtimeapi.LinuxContainerResources) {
+		const msg = "container is expected to not have swap access"
+
+		for _, r := range resources {
+			switch cgroupVersion {
+			case cgroupV1:
+				assert.Equal(t, r.MemorySwapLimitInBytes, r.MemoryLimitInBytes, msg)
+			case cgroupV2:
+				assert.Equal(t, r.Unified[cm.Cgroup2MaxSwapFilename], "0", msg)
+			}
+		}
+	}
+
+	expectSwap := func(cgroupVersion CgroupVersion, swapBytesExpected int, resources *runtimeapi.LinuxContainerResources) {
+		msg := fmt.Sprintf("container swap is expected to be limited by %d bytes", swapBytesExpected)
+
+		switch cgroupVersion {
+		case cgroupV1:
+			assert.Equal(t, resources.MemorySwapLimitInBytes, resources.MemoryLimitInBytes+int64(swapBytesExpected), msg)
+		case cgroupV2:
+			assert.Equal(t, resources.Unified[cm.Cgroup2MaxSwapFilename], fmt.Sprintf("%d", swapBytesExpected), msg)
+		}
+	}
+
+	for _, tc := range []struct {
+		name                       string
+		cgroupVersion              CgroupVersion
+		qosClass                   v1.PodQOSClass
+		nodeSwapFeatureGateEnabled bool
+	}{
+		{
+			name:                       "node swap feature gate disabled, cgroup v1, qos best effort",
+			cgroupVersion:              cgroupV1,
+			qosClass:                   v1.PodQOSBestEffort,
+			nodeSwapFeatureGateEnabled: false,
+		},
+		{
+			name:                       "node swap feature gate disabled, cgroup v2, qos burstable",
+			cgroupVersion:              cgroupV2,
+			qosClass:                   v1.PodQOSBurstable,
+			nodeSwapFeatureGateEnabled: false,
+		},
+		{
+			name:                       "node swap feature gate disabled, cgroup v2, qos guaranteed",
+			cgroupVersion:              cgroupV2,
+			qosClass:                   v1.PodQOSGuaranteed,
+			nodeSwapFeatureGateEnabled: false,
+		},
+		{
+			name:                       "node swap feature gate enabled, cgroup v1, qos burstable",
+			cgroupVersion:              cgroupV1,
+			qosClass:                   v1.PodQOSBurstable,
+			nodeSwapFeatureGateEnabled: true,
+		},
+		{
+			name:                       "node swap feature gate enabled, cgroup v1, qos best-effort",
+			cgroupVersion:              cgroupV1,
+			qosClass:                   v1.PodQOSBestEffort,
+			nodeSwapFeatureGateEnabled: true,
+		},
+		{
+			name:                       "node swap feature gate enabled, cgroup v1, qos guaranteed",
+			cgroupVersion:              cgroupV1,
+			qosClass:                   v1.PodQOSGuaranteed,
+			nodeSwapFeatureGateEnabled: true,
+		},
+		{
+			name:                       "node swap feature gate enabled, cgroup v2, qos burstable",
+			cgroupVersion:              cgroupV2,
+			qosClass:                   v1.PodQOSBurstable,
+			nodeSwapFeatureGateEnabled: true,
+		},
+		{
+			name:                       "node swap feature gate enabled, cgroup v2, qos best-effort",
+			cgroupVersion:              cgroupV2,
+			qosClass:                   v1.PodQOSBestEffort,
+			nodeSwapFeatureGateEnabled: true,
+		},
+		{
+			name:                       "node swap feature gate enabled, cgroup v2, qos guaranteed",
+			cgroupVersion:              cgroupV2,
+			qosClass:                   v1.PodQOSGuaranteed,
+			nodeSwapFeatureGateEnabled: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isCgroup2UnifiedMode = func() bool {
+				return tc.cgroupVersion == cgroupV2
+			}
+			if tc.nodeSwapFeatureGateEnabled {
+				defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.NodeSwap, true)()
+			}
+
+			var resourceReqsC1, resourceReqsC2 v1.ResourceRequirements
+			switch tc.qosClass {
+			case v1.PodQOSBurstable:
+				resourceReqsC1 = v1.ResourceRequirements{
+					Requests: v1.ResourceList{v1.ResourceMemory: resource.MustParse("1Gi")},
+				}
+				resourceReqsC2 = v1.ResourceRequirements{
+					Requests: v1.ResourceList{v1.ResourceMemory: resource.MustParse("2Gi")},
+				}
+			case v1.PodQOSGuaranteed:
+				resourceReqsC1 = v1.ResourceRequirements{
+					Requests: v1.ResourceList{v1.ResourceMemory: resource.MustParse("1Gi"), v1.ResourceCPU: resource.MustParse("1")},
+					Limits:   v1.ResourceList{v1.ResourceMemory: resource.MustParse("1Gi"), v1.ResourceCPU: resource.MustParse("1")},
+				}
+				resourceReqsC2 = v1.ResourceRequirements{
+					Requests: v1.ResourceList{v1.ResourceMemory: resource.MustParse("2Gi"), v1.ResourceCPU: resource.MustParse("1")},
+					Limits:   v1.ResourceList{v1.ResourceMemory: resource.MustParse("2Gi"), v1.ResourceCPU: resource.MustParse("1")},
+				}
+			}
+			pod.Spec.Containers[0].Resources = resourceReqsC1
+			pod.Spec.Containers[1].Resources = resourceReqsC2
+
+			resourcesC1 := m.generateLinuxContainerResources(pod, &pod.Spec.Containers[0], false)
+			resourcesC2 := m.generateLinuxContainerResources(pod, &pod.Spec.Containers[1], false)
+
+			if !tc.nodeSwapFeatureGateEnabled {
+				expectNoSwap(tc.cgroupVersion, resourcesC1, resourcesC2)
+				return
+			}
+
+			if tc.qosClass != v1.PodQOSBurstable {
+				expectNoSwap(tc.cgroupVersion, resourcesC1, resourcesC2)
+				return
+			} else {
+				totalPodMemory := resourceReqsC1.Requests.Memory()
+				totalPodMemory.Add(*resourceReqsC2.Requests.Memory())
+
+				requestMemoryProportionC1 := float64(resourceReqsC1.Requests.Memory().Value()) / float64(totalPodMemory.Value())
+				requestMemoryProportionC2 := float64(resourceReqsC2.Requests.Memory().Value()) / float64(totalPodMemory.Value())
+
+				swapMemoryProportion := float64(m.machineInfo.SwapCapacity) / float64(m.machineInfo.MemoryCapacity)
+
+				expectedSwapLimitC1 := requestMemoryProportionC1 * swapMemoryProportion * float64(resourceReqsC1.Requests.Memory().Value())
+				expectedSwapLimitC2 := requestMemoryProportionC2 * swapMemoryProportion * float64(resourceReqsC2.Requests.Memory().Value())
+
+				expectSwap(tc.cgroupVersion, int(expectedSwapLimitC1), resourcesC1)
+				expectSwap(tc.cgroupVersion, int(expectedSwapLimitC2), resourcesC2)
+			}
+		})
+	}
 }
