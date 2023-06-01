@@ -160,9 +160,6 @@ type kubeGenericRuntimeManager struct {
 	// Use RuntimeDefault as the default seccomp profile for all workloads.
 	seccompDefault bool
 
-	// MemorySwapBehavior defines how swap is used
-	memorySwapBehavior string
-
 	//Function to get node allocatable resources
 	getNodeAllocatable func() v1.ResourceList
 
@@ -204,7 +201,6 @@ func NewKubeGenericRuntimeManager(
 	logManager logs.ContainerLogManager,
 	runtimeClassManager *runtimeclass.Manager,
 	seccompDefault bool,
-	memorySwapBehavior string,
 	getNodeAllocatable func() v1.ResourceList,
 	memoryThrottlingFactor float64,
 	podPullingTimeRecorder images.ImagePodPullingTimeRecorder,
@@ -233,7 +229,6 @@ func NewKubeGenericRuntimeManager(
 		runtimeClassManager:    runtimeClassManager,
 		logReduction:           logreduction.NewLogReduction(identicalErrorDelay),
 		seccompDefault:         seccompDefault,
-		memorySwapBehavior:     memorySwapBehavior,
 		getNodeAllocatable:     getNodeAllocatable,
 		memoryThrottlingFactor: memoryThrottlingFactor,
 	}

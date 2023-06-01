@@ -36,7 +36,6 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/qos"
-	kubelettypes "k8s.io/kubernetes/pkg/kubelet/types"
 )
 
 var defaultPageSize = int64(os.Getpagesize())
@@ -100,20 +99,7 @@ func (m *kubeGenericRuntimeManager) generateLinuxContainerResources(pod *v1.Pod,
 	lcr.HugepageLimits = GetHugepageLimitsFromResources(container.Resources)
 
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.NodeSwap) {
-		// NOTE(ehashman): Behaviour is defined in the opencontainers runtime spec:
-		// https://github.com/opencontainers/runtime-spec/blob/1c3f411f041711bbeecf35ff7e93461ea6789220/config-linux.md#memory
-		switch m.memorySwapBehavior {
-		case kubelettypes.UnlimitedSwap:
-			// -1 = unlimited swap
-			lcr.MemorySwapLimitInBytes = -1
-		case kubelettypes.LimitedSwap:
-			fallthrough
-		default:
-			// memorySwapLimit = total permitted memory+swap; if equal to memory limit, => 0 swap above memory limit
-			// Some swapping is still possible.
-			// Note that if memory limit is 0, memory swap limit is ignored.
-			lcr.MemorySwapLimitInBytes = lcr.MemoryLimitInBytes
-		}
+		// TODO: implement in further commits
 	}
 
 	// Set memory.min and memory.high to enforce MemoryQoS

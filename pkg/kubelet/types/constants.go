@@ -33,12 +33,6 @@ const (
 	NodeAllocatableNoneKey        = "none"
 )
 
-// SwapBehavior types
-const (
-	LimitedSwap   = "LimitedSwap"
-	UnlimitedSwap = "UnlimitedSwap"
-)
-
 // Alpha conditions managed by Kubelet that are not yet part of the API. The
 // entries here should be moved to staging/src/k8s.io.api/core/v1/types.go
 // once the feature managing the condition graduates to Beta.

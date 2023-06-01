@@ -1141,7 +1141,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"k8s.io/kubelet/config/v1beta1.KubeletWebhookAuthorization":                                       schema_k8sio_kubelet_config_v1beta1_KubeletWebhookAuthorization(ref),
 		"k8s.io/kubelet/config/v1beta1.KubeletX509Authentication":                                         schema_k8sio_kubelet_config_v1beta1_KubeletX509Authentication(ref),
 		"k8s.io/kubelet/config/v1beta1.MemoryReservation":                                                 schema_k8sio_kubelet_config_v1beta1_MemoryReservation(ref),
-		"k8s.io/kubelet/config/v1beta1.MemorySwapConfiguration":                                           schema_k8sio_kubelet_config_v1beta1_MemorySwapConfiguration(ref),
 		"k8s.io/kubelet/config/v1beta1.SerializedNodeConfigSource":                                        schema_k8sio_kubelet_config_v1beta1_SerializedNodeConfigSource(ref),
 		"k8s.io/kubelet/config/v1beta1.ShutdownGracePeriodByPodPriority":                                  schema_k8sio_kubelet_config_v1beta1_ShutdownGracePeriodByPodPriority(ref),
 		"k8s.io/kubernetes/pkg/apis/abac/v1beta1.Policy":                                                  schema_pkg_apis_abac_v1beta1_Policy(ref),
@@ -57578,13 +57577,6 @@ func schema_k8sio_kubelet_config_v1beta1_KubeletConfiguration(ref common.Referen
 							Format:      "",
 						},
 					},
-					"memorySwap": {
-						SchemaProps: spec.SchemaProps{
-							Description: "memorySwap configures swap memory available to container workloads.",
-							Default:     map[string]interface{}{},
-							Ref:         ref("k8s.io/kubelet/config/v1beta1.MemorySwapConfiguration"),
-						},
-					},
 					"containerLogMaxSize": {
 						SchemaProps: spec.SchemaProps{
 							Description: "containerLogMaxSize is a quantity defining the maximum size of the container log file before it is rotated. For example: \"5Mi\" or \"256Ki\". Default: \"10Mi\"",
@@ -57860,7 +57852,7 @@ func schema_k8sio_kubelet_config_v1beta1_KubeletConfiguration(ref common.Referen
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/api/core/v1.Taint", "k8s.io/apimachinery/pkg/apis/meta/v1.Duration", "k8s.io/component-base/logs/api/v1.LoggingConfiguration", "k8s.io/component-base/tracing/api/v1.TracingConfiguration", "k8s.io/kubelet/config/v1beta1.KubeletAuthentication", "k8s.io/kubelet/config/v1beta1.KubeletAuthorization", "k8s.io/kubelet/config/v1beta1.MemoryReservation", "k8s.io/kubelet/config/v1beta1.MemorySwapConfiguration", "k8s.io/kubelet/config/v1beta1.ShutdownGracePeriodByPodPriority"},
+			"k8s.io/api/core/v1.Taint", "k8s.io/apimachinery/pkg/apis/meta/v1.Duration", "k8s.io/component-base/logs/api/v1.LoggingConfiguration", "k8s.io/component-base/tracing/api/v1.TracingConfiguration", "k8s.io/kubelet/config/v1beta1.KubeletAuthentication", "k8s.io/kubelet/config/v1beta1.KubeletAuthorization", "k8s.io/kubelet/config/v1beta1.MemoryReservation", "k8s.io/kubelet/config/v1beta1.ShutdownGracePeriodByPodPriority"},
 	}
 }
 
@@ -57970,25 +57962,6 @@ func schema_k8sio_kubelet_config_v1beta1_MemoryReservation(ref common.ReferenceC
 		},
 		Dependencies: []string{
 			"k8s.io/apimachinery/pkg/api/resource.Quantity"},
-	}
-}
-
-func schema_k8sio_kubelet_config_v1beta1_MemorySwapConfiguration(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"swapBehavior": {
-						SchemaProps: spec.SchemaProps{
-							Description: "swapBehavior configures swap memory available to container workloads. May be one of \"\", \"LimitedSwap\": workload combined memory and swap usage cannot exceed pod memory limit \"UnlimitedSwap\": workloads can use unlimited swap, up to the allocatable limit.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-				},
-			},
-		},
 	}
 }
 

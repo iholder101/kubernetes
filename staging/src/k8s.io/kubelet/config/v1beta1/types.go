@@ -577,10 +577,6 @@ type KubeletConfiguration struct {
 	// Default: true
 	// +optional
 	FailSwapOn *bool `json:"failSwapOn,omitempty"`
-	// memorySwap configures swap memory available to container workloads.
-	// +featureGate=NodeSwap
-	// +optional
-	MemorySwap MemorySwapConfiguration `json:"memorySwap,omitempty"`
 	// containerLogMaxSize is a quantity defining the maximum size of the container log
 	// file before it is rotated. For example: "5Mi" or "256Ki".
 	// Default: "10Mi"
@@ -925,15 +921,6 @@ type ShutdownGracePeriodByPodPriority struct {
 	Priority int32 `json:"priority"`
 	// shutdownGracePeriodSeconds is the shutdown grace period in seconds
 	ShutdownGracePeriodSeconds int64 `json:"shutdownGracePeriodSeconds"`
-}
-
-type MemorySwapConfiguration struct {
-	// swapBehavior configures swap memory available to container workloads. May be one of
-	// "", "LimitedSwap": workload combined memory and swap usage cannot exceed pod memory limit
-	// "UnlimitedSwap": workloads can use unlimited swap, up to the allocatable limit.
-	// +featureGate=NodeSwap
-	// +optional
-	SwapBehavior string `json:"swapBehavior,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

@@ -337,10 +337,6 @@ type KubeletConfiguration struct {
 	FeatureGates map[string]bool
 	// Tells the Kubelet to fail to start if swap is enabled on the node.
 	FailSwapOn bool
-	// memorySwap configures swap memory available to container workloads.
-	// +featureGate=NodeSwap
-	// +optional
-	MemorySwap MemorySwapConfiguration
 	// A quantity defines the maximum size of the container log file before it is rotated. For example: "5Mi" or "256Ki".
 	ContainerLogMaxSize string
 	// Maximum number of container log files that can be present for a container.
@@ -650,13 +646,4 @@ type ShutdownGracePeriodByPodPriority struct {
 	Priority int32
 	// shutdownGracePeriodSeconds is the shutdown grace period in seconds
 	ShutdownGracePeriodSeconds int64
-}
-
-type MemorySwapConfiguration struct {
-	// swapBehavior configures swap memory available to container workloads. May be one of
-	// "", "LimitedSwap": workload combined memory and swap usage cannot exceed pod memory limit
-	// "UnlimitedSwap": workloads can use unlimited swap, up to the allocatable limit.
-	// +featureGate=NodeSwap
-	// +optional
-	SwapBehavior string
 }

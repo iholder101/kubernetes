@@ -244,7 +244,6 @@ var (
 		"MaxOpenFiles",
 		"MaxPods",
 		"MemoryManagerPolicy",
-		"MemorySwap.SwapBehavior",
 		"NodeLeaseDurationSeconds",
 		"NodeStatusMaxImages",
 		"NodeStatusUpdateFrequency.Duration",
