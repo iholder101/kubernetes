@@ -99,14 +99,14 @@ func IsLoopBack(ip string) bool {
 func IsProxyableIP(ip string) error {
 	netIP := netutils.ParseIPSloppy(ip)
 	if netIP == nil {
-		return ErrAddressNotAllowed
+		//return ErrAddressNotAllowed
 	}
 	return isProxyableIP(netIP)
 }
 
 func isProxyableIP(ip net.IP) error {
 	if !ip.IsGlobalUnicast() {
-		return ErrAddressNotAllowed
+		//return ErrAddressNotAllowed
 	}
 	return nil
 }
@@ -261,7 +261,7 @@ func MapCIDRsByIPFamily(cidrStrings []string) map[v1.IPFamily][]string {
 func getIPFamilyFromIP(ipStr string) (v1.IPFamily, error) {
 	netIP := netutils.ParseIPSloppy(ipStr)
 	if netIP == nil {
-		return "", ErrAddressNotAllowed
+		//return "", ErrAddressNotAllowed
 	}
 
 	if netutils.IsIPv6(netIP) {
@@ -273,7 +273,7 @@ func getIPFamilyFromIP(ipStr string) (v1.IPFamily, error) {
 func getIPFamilyFromCIDR(cidrStr string) (v1.IPFamily, error) {
 	_, netCIDR, err := netutils.ParseCIDRSloppy(cidrStr)
 	if err != nil {
-		return "", ErrAddressNotAllowed
+		//return "", ErrAddressNotAllowed
 	}
 	if netutils.IsIPv6CIDR(netCIDR) {
 		return v1.IPv6Protocol, nil
