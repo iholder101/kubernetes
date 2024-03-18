@@ -252,6 +252,7 @@ func TestTopPod(t *testing.T) {
 
 			// Check the presence of pod names&namespaces/container names in the output.
 			result := buf.String()
+			t.Errorf("\n" + result)
 			if testCase.containers {
 				for _, containerName := range expectedContainerNames {
 					if !strings.Contains(result, containerName) {
