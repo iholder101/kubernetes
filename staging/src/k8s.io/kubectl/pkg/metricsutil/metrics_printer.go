@@ -31,9 +31,10 @@ var (
 	MeasuredResources = []v1.ResourceName{
 		v1.ResourceCPU,
 		v1.ResourceMemory,
+		v1.ResourceSwapMemory,
 	}
-	NodeColumns     = []string{"NAME", "CPU(cores)", "CPU%", "MEMORY(bytes)", "MEMORY%"}
-	PodColumns      = []string{"NAME", "CPU(cores)", "MEMORY(bytes)"}
+	NodeColumns     = []string{"NAME", "CPU(cores)", "CPU%", "MEMORY(bytes)", "MEMORY%", "SWAP(bytes)", "SWAP%"}
+	PodColumns      = []string{"NAME", "CPU(cores)", "MEMORY(bytes)", "SWAP(bytes)"}
 	NamespaceColumn = "NAMESPACE"
 	PodColumn       = "POD"
 )
