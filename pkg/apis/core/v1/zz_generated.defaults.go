@@ -55,6 +55,7 @@ func RegisterDefaults(scheme *runtime.Scheme) error {
 	scheme.AddTypeDefaultingFunc(&v1.ReplicationControllerList{}, func(obj interface{}) {
 		SetObjectDefaults_ReplicationControllerList(obj.(*v1.ReplicationControllerList))
 	})
+	scheme.AddTypeDefaultingFunc(&v1.Resize{}, func(obj interface{}) { SetObjectDefaults_Resize(obj.(*v1.Resize)) })
 	scheme.AddTypeDefaultingFunc(&v1.ResourceQuota{}, func(obj interface{}) { SetObjectDefaults_ResourceQuota(obj.(*v1.ResourceQuota)) })
 	scheme.AddTypeDefaultingFunc(&v1.ResourceQuotaList{}, func(obj interface{}) { SetObjectDefaults_ResourceQuotaList(obj.(*v1.ResourceQuotaList)) })
 	scheme.AddTypeDefaultingFunc(&v1.Secret{}, func(obj interface{}) { SetObjectDefaults_Secret(obj.(*v1.Secret)) })
@@ -1048,6 +1049,9 @@ func SetObjectDefaults_ReplicationControllerList(in *v1.ReplicationControllerLis
 		a := &in.Items[i]
 		SetObjectDefaults_ReplicationController(a)
 	}
+}
+
+func SetObjectDefaults_Resize(in *v1.Resize) {
 }
 
 func SetObjectDefaults_ResourceQuota(in *v1.ResourceQuota) {
