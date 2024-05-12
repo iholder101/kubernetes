@@ -4684,6 +4684,8 @@ type PodStatusResult struct {
 
 // +genclient
 // +genclient:method=UpdateEphemeralContainers,verb=update,subresource=ephemeralcontainers
+// +genclient:method=GetResize,verb=get,subresource=resize,result=k8s.io/api/core/v1.Resize
+// +genclient:method=UpdateResize,verb=update,subresource=resize,input=k8s.io/api/core/v1.Resize,result=k8s.io/api/core/v1.Resize
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // Pod is a collection of containers that can run on a host. This resource is created
