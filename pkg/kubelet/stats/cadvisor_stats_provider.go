@@ -381,9 +381,9 @@ func getCadvisorPodInfoFromPodUID(podUID types.UID, infos map[string]cadvisorapi
 // the second return map is pod cgroup key <-> ContainerInfo.
 // A ContainerInfo is considered to be of a terminated container if it has an
 // older CreationTime and zero CPU instantaneous and memory RSS usage.
-func filterTerminatedContainerInfoAndAssembleByPodCgroupKey(containerInfo map[string]cadvisorapiv2.ContainerInfo) (map[string]cadvisorapiv2.ContainerInfo, map[string]cadvisorapiv2.ContainerInfo) {
+func filterTerminatedContainerInfoAndAssembleByPodCgroupKey(containerInfo map[string]cadvisorapiv2.ContainerInfo) (filteredInfos, terminatedInfos, allInfos map[string]cadvisorapiv2.ContainerInfo) {
 	cinfoMap := make(map[containerID][]containerInfoWithCgroup)
-	cinfosByPodCgroupKey := make(map[string]cadvisorapiv2.ContainerInfo)
+	allInfos = make(map[string]cadvisorapiv2.ContainerInfo)
 	for key, cinfo := range containerInfo {
 		var podCgroupKey string
 		if cm.IsSystemdStyleName(key) {
@@ -394,7 +394,7 @@ func filterTerminatedContainerInfoAndAssembleByPodCgroupKey(containerInfo map[st
 			// Take last component only.
 			podCgroupKey = filepath.Base(key)
 		}
-		cinfosByPodCgroupKey[podCgroupKey] = cinfo
+		allInfos[podCgroupKey] = cinfo
 		if !isPodManagedContainer(&cinfo) {
 			continue
 		}
@@ -407,25 +407,28 @@ func filterTerminatedContainerInfoAndAssembleByPodCgroupKey(containerInfo map[st
 			cgroup: key,
 		})
 	}
-	result := make(map[string]cadvisorapiv2.ContainerInfo)
+	filteredInfos = make(map[string]cadvisorapiv2.ContainerInfo)
+	terminatedInfos = make(map[string]cadvisorapiv2.ContainerInfo)
 	for _, refs := range cinfoMap {
 		if len(refs) == 1 {
 			// ContainerInfo with no CPU/memory/network usage for uncleaned cgroups of
 			// already terminated containers, which should not be shown in the results.
 			if !isContainerTerminated(&refs[0].cinfo) {
-				result[refs[0].cgroup] = refs[0].cinfo
+				filteredInfos[refs[0].cgroup] = refs[0].cinfo
+			} else {
+				terminatedInfos[refs[0].cgroup] = refs[0].cinfo
 			}
 			continue
 		}
 		sort.Sort(ByCreationTime(refs))
 		for i := len(refs) - 1; i >= 0; i-- {
 			if hasMemoryAndCPUInstUsage(&refs[i].cinfo) {
-				result[refs[i].cgroup] = refs[i].cinfo
+				filteredInfos[refs[i].cgroup] = refs[i].cinfo
 				break
 			}
 		}
 	}
-	return result, cinfosByPodCgroupKey
+	return filteredInfos, terminatedInfos, allInfos
 }
 
 // ByCreationTime implements sort.Interface for []containerInfoWithCgroup based
