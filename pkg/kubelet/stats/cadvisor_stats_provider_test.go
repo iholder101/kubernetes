@@ -152,6 +152,7 @@ func TestCadvisorListPodStats(t *testing.T) {
 		cName20 = "c1" // ensure cName20 conflicts with cName01, but is in a different pod + namespace
 		cName30 = "c0-init"
 		cName31 = "c1"
+		cName2  = "c2"
 	)
 	const (
 		rootfsCapacity    = uint64(10000000)
@@ -178,8 +179,10 @@ func TestCadvisorListPodStats(t *testing.T) {
 		"/pod0-c0": getTestContainerInfo(seedPod0Container0, pName0, namespace0, cName00),
 		"/pod0-c1": getTestContainerInfo(seedPod0Container1, pName0, namespace0, cName01),
 		// Pod1 - Namespace0
-		"/pod1-i":  getTestContainerInfo(seedPod1Infra, pName1, namespace0, kubelettypes.PodInfraContainerName),
-		"/pod1-c0": getTestContainerInfo(seedPod1Container, pName1, namespace0, cName10),
+		"/pod1-i":             getTestContainerInfo(seedPod1Infra, pName1, namespace0, kubelettypes.PodInfraContainerName),
+		"/pod1-c0":            getTestContainerInfo(seedPod1Container, pName1, namespace0, cName10),
+		"/pod1-c2-terminated": getTerminatedContainerInfo(seedPod1Container, pName1, namespace0, cName2),
+		//"/pod1-c2-terminated": getTestContainerInfo(seedPod1Container, pName1, namespace0, cName2),
 		// Pod2 - Namespace2
 		"/pod2-i":                        getTestContainerInfo(seedPod2Infra, pName2, namespace2, kubelettypes.PodInfraContainerName),
 		"/pod2-c0":                       getTestContainerInfo(seedPod2Container, pName2, namespace2, cName20),
@@ -352,6 +355,124 @@ func TestCadvisorListPodStats(t *testing.T) {
 	checkCPUStats(t, "Pod3Container1", seedPod3Container1, con.CPU)
 	checkMemoryStats(t, "Pod3Container1", seedPod3Container1, infos["/pod3-c1"], con.Memory)
 	checkSwapStats(t, "Pod3Container1", seedPod3Container1, infos["/pod3-c1"], con.Swap)
+}
+
+func TestCadvisorListPodStatsWithDeadContainers(t *testing.T) {
+	ctx := context.Background()
+	const (
+		namespace0 = "test0"
+	)
+	const (
+		seedRoot    = 0
+		seedRuntime = 100
+		seedKubelet = 200
+		seedMisc    = 300
+
+		seedPod1Infra     = 3000
+		seedPod1Container = 4000
+
+		seedEphemeralVolume1  = 10000
+		seedEphemeralVolume2  = 10001
+		seedPersistentVolume1 = 20000
+		seedPersistentVolume2 = 20001
+	)
+	const (
+		pName1 = "pod1"
+	)
+	const (
+		cName10 = "c0" // ensure cName10 conflicts with cName02, but is in a different pod
+		cName2  = "c2"
+	)
+	const (
+		rootfsCapacity    = uint64(10000000)
+		rootfsAvailable   = uint64(5000000)
+		rootfsInodesFree  = uint64(1000)
+		rootfsInodes      = uint64(2000)
+		imagefsCapacity   = uint64(20000000)
+		imagefsAvailable  = uint64(8000000)
+		imagefsInodesFree = uint64(2000)
+		imagefsInodes     = uint64(4000)
+	)
+
+	prf1 := statsapi.PodReference{Name: pName1, Namespace: namespace0, UID: "UID" + pName1}
+	infos := map[string]cadvisorapiv2.ContainerInfo{
+		"/":              getTestContainerInfo(seedRoot, "", "", ""),
+		"/docker-daemon": getTestContainerInfo(seedRuntime, "", "", ""),
+		"/kubelet":       getTestContainerInfo(seedKubelet, "", "", ""),
+		"/system":        getTestContainerInfo(seedMisc, "", "", ""),
+
+		// Pod1 - Namespace0
+		"/pod1-i":             getTestContainerInfo(seedPod1Infra, pName1, namespace0, kubelettypes.PodInfraContainerName),
+		"/pod1-c0":            getTestContainerInfo(seedPod1Container, pName1, namespace0, cName10),
+		"/pod1-c2-terminated": getTerminatedContainerInfo(seedPod1Container, pName1, namespace0, cName2),
+		//"/pod1-c2-terminated": getTestContainerInfo(seedPod1Container, pName1, namespace0, cName2),
+	}
+
+	freeRootfsInodes := rootfsInodesFree
+	totalRootfsInodes := rootfsInodes
+	rootfs := cadvisorapiv2.FsInfo{
+		Capacity:   rootfsCapacity,
+		Available:  rootfsAvailable,
+		InodesFree: &freeRootfsInodes,
+		Inodes:     &totalRootfsInodes,
+	}
+
+	freeImagefsInodes := imagefsInodesFree
+	totalImagefsInodes := imagefsInodes
+	imagefs := cadvisorapiv2.FsInfo{
+		Capacity:   imagefsCapacity,
+		Available:  imagefsAvailable,
+		InodesFree: &freeImagefsInodes,
+		Inodes:     &totalImagefsInodes,
+	}
+
+	options := cadvisorapiv2.RequestOptions{
+		IdType:    cadvisorapiv2.TypeName,
+		Count:     2,
+		Recursive: true,
+	}
+
+	mockCadvisor := cadvisortest.NewMockInterface(t)
+	mockCadvisor.EXPECT().ContainerInfoV2("/", options).Return(infos, nil)
+	mockCadvisor.EXPECT().RootFsInfo().Return(rootfs, nil)
+	mockCadvisor.EXPECT().ImagesFsInfo().Return(imagefs, nil)
+
+	mockRuntime := containertest.NewMockRuntime(t)
+
+	ephemeralVolumes := []statsapi.VolumeStats{getPodVolumeStats(seedEphemeralVolume1, "ephemeralVolume1"),
+		getPodVolumeStats(seedEphemeralVolume2, "ephemeralVolume2")}
+	persistentVolumes := []statsapi.VolumeStats{getPodVolumeStats(seedPersistentVolume1, "persistentVolume1"),
+		getPodVolumeStats(seedPersistentVolume2, "persistentVolume2")}
+	volumeStats := serverstats.PodVolumeStats{
+		EphemeralVolumes:  ephemeralVolumes,
+		PersistentVolumes: persistentVolumes,
+	}
+	p1Time := metav1.Now()
+	mockStatus := statustest.NewMockPodStatusProvider(t)
+	mockStatus.EXPECT().GetPodStatus(types.UID("UID"+pName1)).Return(v1.PodStatus{StartTime: &p1Time}, true)
+
+	resourceAnalyzer := &fakeResourceAnalyzer{podVolumeStats: volumeStats}
+
+	p := NewCadvisorStatsProvider(mockCadvisor, resourceAnalyzer, nil, nil, mockRuntime, mockStatus, NewFakeHostStatsProvider())
+	pods, err := p.ListPodStats(ctx)
+	assert.NoError(t, err)
+
+	assert.Len(t, pods, 1)
+	indexPods := make(map[statsapi.PodReference]statsapi.PodStats, len(pods))
+	for _, pod := range pods {
+		indexPods[pod.PodRef] = pod
+	}
+
+	// Validate Pod1 Results
+	ps, found := indexPods[prf1]
+	assert.True(t, found)
+	assert.Len(t, ps.Containers, 2)
+	con := ps.Containers[0]
+	assert.Equal(t, cName10, con.Name)
+	checkCPUStats(t, "Pod1Container0", seedPod1Container, con.CPU)
+	checkMemoryStats(t, "Pod1Container0", seedPod1Container, infos["/pod1-c0"], con.Memory)
+	checkSwapStats(t, "Pod1Container0", seedPod1Container, infos["/pod1-c0"], con.Swap)
+	checkNetworkStats(t, "Pod1", seedPod1Infra, ps.Network)
 }
 
 func TestCadvisorListPodCPUAndMemoryStats(t *testing.T) {
