@@ -94,59 +94,19 @@ func (p *cadvisorStatsProvider) ListPodStats(_ context.Context) ([]statsapi.PodS
 		return nil, fmt.Errorf("failed to get container info from cadvisor: %v", err)
 	}
 
-	filteredInfos, allInfos := filterTerminatedContainerInfoAndAssembleByPodCgroupKey(infos)
+	filteredInfos, terminatedInfos, allInfos := filterTerminatedContainerInfoAndAssembleByPodCgroupKey(infos)
 	// Map each container to a pod and update the PodStats with container data.
-	podToStats := map[statsapi.PodReference]*statsapi.PodStats{}
-	for key, cinfo := range filteredInfos {
-		// On systemd using devicemapper each mount into the container has an
-		// associated cgroup. We ignore them to ensure we do not get duplicate
-		// entries in our summary. For details on .mount units:
-		// http://man7.org/linux/man-pages/man5/systemd.mount.5.html
-		if strings.HasSuffix(key, ".mount") {
-			continue
-		}
-		// Build the Pod key if this container is managed by a Pod
-		if !isPodManagedContainer(&cinfo) {
-			continue
-		}
-		ref := buildPodRef(cinfo.Spec.Labels)
-
-		// Lookup the PodStats for the pod using the PodRef. If none exists,
-		// initialize a new entry.
-		podStats, found := podToStats[ref]
-		if !found {
-			podStats = &statsapi.PodStats{PodRef: ref}
-			podToStats[ref] = podStats
-		}
-
-		// Update the PodStats entry with the stats from the container by
-		// adding it to podStats.Containers.
-		containerName := kubetypes.GetContainerName(cinfo.Spec.Labels)
-		if containerName == kubetypes.PodInfraContainerName {
-			// Special case for infrastructure container which is hidden from
-			// the user and has network stats.
-			podStats.Network = cadvisorInfoToNetworkStats(&cinfo)
-		} else {
-			containerStat := cadvisorInfoToContainerStats(containerName, &cinfo, &rootFsInfo, &imageFsInfo)
-			// NOTE: This doesn't support the old pod log path, `/var/log/pods/UID`. For containers
-			// using old log path, they will be populated by cadvisorInfoToContainerStats.
-			podUID := types.UID(podStats.PodRef.UID)
-			logs, err := p.hostStatsProvider.getPodContainerLogStats(podStats.PodRef.Namespace, podStats.PodRef.Name, podUID, containerName, &rootFsInfo)
-			if err != nil {
-				klog.ErrorS(err, "Unable to fetch container log stats", "containerName", containerName)
-			} else {
-				containerStat.Logs = logs
-			}
-			podStats.Containers = append(podStats.Containers, *containerStat)
-		}
-		// Either way, collect process stats
-		podStats.ProcessStats = mergeProcessStats(podStats.ProcessStats, cadvisorInfoToProcessStats(&cinfo))
-	}
+	podToStats := p.containerInfoToPodStats(filteredInfos, rootFsInfo, imageFsInfo)
+	podTerminatedContainersToStats := p.containerInfoToPodStats(terminatedInfos, rootFsInfo, imageFsInfo)
 
 	// Add each PodStats to the result.
 	result := make([]statsapi.PodStats, 0, len(podToStats))
-	for _, podStats := range podToStats {
-		makePodStorageStats(podStats, &rootFsInfo, p.resourceAnalyzer, p.hostStatsProvider, false)
+	for podRef, podStats := range podToStats {
+		var podTerminatedContainerStats []statsapi.ContainerStats
+		if terminatedContainers, found := podTerminatedContainersToStats[podRef]; found {
+			podTerminatedContainerStats = terminatedContainers.Containers
+		}
+		makePodStorageStats(podStats, podTerminatedContainerStats, &rootFsInfo, p.resourceAnalyzer, p.hostStatsProvider, false)
 
 		podUID := types.UID(podStats.PodRef.UID)
 		// Lookup the pod-level cgroup's CPU and memory stats
@@ -184,7 +144,7 @@ func (p *cadvisorStatsProvider) ListPodCPUAndMemoryStats(_ context.Context) ([]s
 	if err != nil {
 		return nil, fmt.Errorf("failed to get container info from cadvisor: %v", err)
 	}
-	filteredInfos, allInfos := filterTerminatedContainerInfoAndAssembleByPodCgroupKey(infos)
+	filteredInfos, _, allInfos := filterTerminatedContainerInfoAndAssembleByPodCgroupKey(infos)
 	// Map each container to a pod and update the PodStats with container data.
 	podToStats := map[statsapi.PodReference]*statsapi.PodStats{}
 	for key, cinfo := range filteredInfos {
@@ -522,4 +482,55 @@ func getCadvisorContainerInfo(ca cadvisor.Interface) (map[string]cadvisorapiv2.C
 		}
 	}
 	return infos, nil
+}
+
+func (p *cadvisorStatsProvider) containerInfoToPodStats(containerInfos map[string]cadvisorapiv2.ContainerInfo, rootFsInfo, imageFsInfo cadvisorapiv2.FsInfo) map[statsapi.PodReference]*statsapi.PodStats {
+	podToStats := map[statsapi.PodReference]*statsapi.PodStats{}
+	for key, cinfo := range containerInfos {
+		// On systemd using devicemapper each mount into the container has an
+		// associated cgroup. We ignore them to ensure we do not get duplicate
+		// entries in our summary. For details on .mount units:
+		// http://man7.org/linux/man-pages/man5/systemd.mount.5.html
+		if strings.HasSuffix(key, ".mount") {
+			continue
+		}
+		// Build the Pod key if this container is managed by a Pod
+		if !isPodManagedContainer(&cinfo) {
+			continue
+		}
+		ref := buildPodRef(cinfo.Spec.Labels)
+
+		// Lookup the PodStats for the pod using the PodRef. If none exists,
+		// initialize a new entry.
+		podStats, found := podToStats[ref]
+		if !found {
+			podStats = &statsapi.PodStats{PodRef: ref}
+			podToStats[ref] = podStats
+		}
+
+		// Update the PodStats entry with the stats from the container by
+		// adding it to podStats.Containers.
+		containerName := kubetypes.GetContainerName(cinfo.Spec.Labels)
+		if containerName == kubetypes.PodInfraContainerName {
+			// Special case for infrastructure container which is hidden from
+			// the user and has network stats.
+			podStats.Network = cadvisorInfoToNetworkStats(&cinfo)
+		} else {
+			containerStat := cadvisorInfoToContainerStats(containerName, &cinfo, &rootFsInfo, &imageFsInfo)
+			// NOTE: This doesn't support the old pod log path, `/var/log/pods/UID`. For containers
+			// using old log path, they will be populated by cadvisorInfoToContainerStats.
+			podUID := types.UID(podStats.PodRef.UID)
+			logs, err := p.hostStatsProvider.getPodContainerLogStats(podStats.PodRef.Namespace, podStats.PodRef.Name, podUID, containerName, &rootFsInfo)
+			if err != nil {
+				klog.ErrorS(err, "Unable to fetch container log stats", "containerName", containerName)
+			} else {
+				containerStat.Logs = logs
+			}
+			podStats.Containers = append(podStats.Containers, *containerStat)
+		}
+		// Either way, collect process stats
+		podStats.ProcessStats = mergeProcessStats(podStats.ProcessStats, cadvisorInfoToProcessStats(&cinfo))
+	}
+
+	return podToStats
 }
