@@ -238,6 +238,20 @@ func (m *managerImpl) IsUnderPIDPressure() bool {
 	return hasNodeCondition(m.nodeConditions, v1.NodePIDPressure)
 }
 
+func calcSwapForBurstablePods(containerMemoryRequest, nodeTotalMemory, totalPodsSwapAvailable uint64) (uint64, error) {
+	if nodeTotalMemory <= 0 {
+		return 0, fmt.Errorf("total node memory is 0")
+	}
+	if containerMemoryRequest > nodeTotalMemory {
+		return 0, fmt.Errorf("container request %d is larger than total node memory %d", containerMemoryRequest, nodeTotalMemory)
+	}
+
+	containerMemoryProportion := float64(containerMemoryRequest) / float64(nodeTotalMemory)
+	swapAllocation := containerMemoryProportion * float64(totalPodsSwapAvailable)
+
+	return uint64(swapAllocation), nil
+}
+
 // synchronize is the main control loop that enforces eviction thresholds.
 // Returns the pod that was killed, or nil if no pod was killed.
 func (m *managerImpl) synchronize(diskInfoProvider DiskInfoProvider, podFunc ActivePodsFunc) ([]*v1.Pod, error) {
