@@ -836,7 +836,7 @@ func (a byEvictionPriority) Less(i, j int) bool {
 }
 
 // makeSignalObservations derives observations using the specified summary provider.
-func makeSignalObservations(summary *statsapi.Summary) (signalObservations, statsFunc) {
+func makeSignalObservations(summary *statsapi.Summary, accessibleSwap uint64) (signalObservations, statsFunc) {
 	// build the function to work against for pod stats
 	statsFunc := cachedStatsFunc(summary.Pods)
 	// build an evaluation context for current eviction signals
