@@ -19,6 +19,7 @@ package e2enode
 import (
 	"context"
 	"fmt"
+	"k8s.io/kubernetes/pkg/util/slice"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -160,6 +161,182 @@ var _ = SIGDescribe("MemoryAllocatableEviction", framework.WithSlow(), framework
 			{
 				evictionPriority: 1,
 				pod:              getMemhogPod("memory-hog-pod", "memory-hog", v1.ResourceRequirements{}),
+			},
+			{
+				evictionPriority: 0,
+				pod:              innocentPod(),
+			},
+		})
+	})
+})
+
+// MemoryAllocatableEviction tests that the node responds to node memory pressure by evicting only responsible pods.
+// Node memory pressure is only encountered because we reserve the majority of the node's capacity via kube-reserved.
+var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithSlow(), framework.WithSerial(), framework.WithDisruptive(), nodefeature.Eviction, func() {
+	f := framework.NewDefaultFramework("memory-allocatable-eviction-with-swap-test")
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
+	expectedNodeCondition := v1.NodeMemoryPressure
+	expectedStarvedResource := v1.ResourceMemory
+	pressureTimeout := 10 * time.Minute
+
+	var swapCapacity *resource.Quantity
+	var memoryCapacity v1.ResourceList
+
+	getSwapCapacity := func() resource.Quantity {
+		if swapCapacity == nil {
+			sleepingPod := getSleepingPod(f.Namespace.Name)
+			sleepingPod = runPodAndWaitUntilScheduled(f, sleepingPod)
+
+			if !isPodCgroupV2(f, sleepingPod) {
+				e2eskipper.Skipf("swap tests require cgroup v2")
+			}
+
+			gomega.Expect(isSwapFeatureGateEnabled()).To(gomega.BeTrueBecause("NodeSwap feature should be on"))
+			swapCapacity = getSwapCapacity(f, sleepingPod)
+			gomega.Expect(swapCapacity).NotTo(gomega.BeNil())
+			gomega.Expect(swapCapacity.IsZero()).To(gomega.BeFalseBecause("swap capacity is not supposed to be zero"))
+
+			err := e2epod.NewPodClient(f).Delete(context.Background(), sleepingPod.Name, metav1.DeleteOptions{})
+			framework.ExpectNoError(err)
+		}
+
+		return *swapCapacity
+	}
+
+	getMemoryCapacity := func() v1.ResourceList {
+		if memoryCapacity == nil {
+			memoryCapacity = getNodeCPUAndMemoryCapacity(context.Background(), f)
+			gomega.Expect(memoryCapacity).NotTo(gomega.BeNil())
+		}
+
+		return memoryCapacity
+	}
+
+	overrideResources := func() v1.ResourceRequirements {
+		const memoryPercentageRequested = 0.7
+		const memoryAndSwapPercentageLimit = 0.9
+
+		memoryCapacity := getMemoryCapacity()[v1.ResourceMemory]
+		memRequest := resource.NewQuantity(int64(float64(memoryCapacity.Value())*memoryPercentageRequested), memoryCapacity.Format)
+
+		stressSize := getSwapCapacity()
+		stressSize.Add(memoryCapacity)
+		stressSize = *resource.NewQuantity(int64(float64(stressSize.Value())*memoryAndSwapPercentageLimit), stressSize.Format)
+
+		framework.Logf("Overriding pod resources. According to memoryCapacity=%s, swapCapacity=%s, setting resources memRequest=%s, memLimits=%s",
+			memoryCapacity.String(), swapCapacity.String(), memRequest.String(), stressSize.String())
+
+		return v1.ResourceRequirements{
+			Requests: map[v1.ResourceName]resource.Quantity{
+				v1.ResourceMemory: *memRequest, // To make it Burstable with enough swap access
+			},
+			Limits: map[v1.ResourceName]resource.Quantity{
+				v1.ResourceMemory: stressSize, // To make it stress swap memory
+			},
+		}
+	}
+
+	overrideArgsFunc := func(oldArgs []string, memLimit *resource.Quantity) []string {
+		gomega.Expect(memLimit).NotTo(gomega.BeNil())
+		gomega.Expect(memLimit.IsZero()).To(gomega.BeFalseBecause("mem limit shouldn't be zero"))
+
+		newArgs := slice.CopyStrings(oldArgs)
+
+		replaceArgValue := func(argument, newValue string) {
+			valueIdx := -1
+			for valueIdx = range oldArgs {
+				if oldArgs[valueIdx] == argument {
+					valueIdx++
+					break
+				}
+			}
+
+			gomega.Expect(valueIdx).ToNot(gomega.Equal(-1), fmt.Sprintf("couldn't find the value index for argument %s", argument))
+			newArgs[valueIdx] = newValue
+		}
+
+		stressSize := strconv.Itoa(int(float64(memLimit.Value()) * 0.8))
+		replaceArgValue("--mem-total", stressSize)
+		replaceArgValue("--mem-alloc-size", "96Mi")
+
+		framework.Logf("Overriding pod args: %v", newArgs)
+
+		return newArgs
+	}
+
+	preCreatePodModificationFunc := func(pod *v1.Pod) {
+		pod.Spec.Containers[0].Resources = overrideResources()
+		pod.Spec.Containers[0].Args = overrideArgsFunc(pod.Spec.Containers[0].Args, pod.Spec.Containers[0].Resources.Limits.Memory())
+	}
+
+	var swapUsageBytes uint64
+
+	postPressureValidationFunc := func() {
+		const percentageExpected = 60.0
+
+		swapCapacity := getSwapCapacity()
+		swapUsagePercentage := (float64(swapUsageBytes) / float64(swapCapacity.Value())) * 100.0
+
+		framework.Logf("swap usage percentage: %.2f", swapUsagePercentage)
+		gomega.Expect(swapUsagePercentage).To(gomega.BeNumerically(">=", percentageExpected),
+			fmt.Sprintf("swap usage is expected to be at least %v, but is %v", percentageExpected, swapUsagePercentage))
+	}
+
+	logFunc := func(ctx context.Context) {
+		summary, err := getNodeSummary(ctx)
+		if err != nil {
+			framework.Logf("Error getting summary: %v", err)
+			return
+		}
+		logMemoryMetricsWithSummary(ctx, summary)
+
+		if summary.Node.Swap == nil {
+			ginkgo.By("DEBUG summary.Node.Swap is nil")
+			return
+		}
+
+		if summary.Node.Swap.SwapUsageBytes == nil {
+			ginkgo.By("DEBUG summary.Node.Swap.SwapUsageBytes is nil")
+			return
+		}
+
+		isNewMax := *summary.Node.Swap.SwapUsageBytes > swapUsageBytes
+		ginkgo.By(fmt.Sprintf("DEBUG current swapUsageBytes=%d, last max swapUsageBytes=%d, isNewMax=%t", *summary.Node.Swap.SwapUsageBytes, swapUsageBytes, isNewMax))
+
+		if isNewMax {
+			swapUsageBytes = *summary.Node.Swap.SwapUsageBytes
+		}
+	}
+
+	ginkgo.Context(fmt.Sprintf(testContextFmt, expectedNodeCondition), func() {
+		tempSetCurrentKubeletConfig(f, func(ctx context.Context, initialConfig *kubeletconfig.KubeletConfiguration) {
+			// init capacity calculation
+			getMemoryCapacity()
+			getSwapCapacity()
+
+			// Set large system and kube reserved values to trigger allocatable thresholds far before hard eviction thresholds.
+			kubeReserved := resource.MustParse("500Mi")
+			initialConfig.KubeReserved = map[string]string{
+				string(v1.ResourceMemory): kubeReserved.String(),
+			}
+			initialConfig.EnforceNodeAllocatable = []string{kubetypes.NodeAllocatableEnforcementKey}
+			initialConfig.CgroupsPerQOS = true
+
+			msg := "swap behavior is already set to LimitedSwap"
+
+			if swapBehavior := initialConfig.MemorySwap.SwapBehavior; swapBehavior != kubetypes.LimitedSwap {
+				initialConfig.MemorySwap.SwapBehavior = kubetypes.LimitedSwap
+				msg = "setting swap behavior to LimitedSwap"
+			}
+
+			ginkgo.By(msg)
+		})
+		runEvictionTest(f, pressureTimeout, expectedNodeCondition, expectedStarvedResource, logFunc, []podEvictSpec{
+			{
+				evictionPriority:             1,
+				pod:                          getMemhogPod("memory-hog-pod", "memory-hog", v1.ResourceRequirements{}),
+				preCreatePodModificationFunc: preCreatePodModificationFunc,
+				postPressureValidationFunc:   postPressureValidationFunc,
 			},
 			{
 				evictionPriority: 0,
@@ -551,8 +728,10 @@ type podEvictSpec struct {
 	pod                        *v1.Pod
 	wantPodDisruptionCondition *v1.PodConditionType
 
-	evictionMaxPodGracePeriod int
-	evictionSoftGracePeriod   int
+	evictionMaxPodGracePeriod    int
+	evictionSoftGracePeriod      int
+	preCreatePodModificationFunc func(pod *v1.Pod)
+	postPressureValidationFunc   func()
 }
 
 // runEvictionTest sets up a testing environment given the provided pods, and checks a few things:
@@ -575,7 +754,11 @@ func runEvictionTest(f *framework.Framework, pressureTimeout time.Duration, expe
 			ginkgo.By("setting up pods to be used by tests")
 			pods := []*v1.Pod{}
 			for _, spec := range testSpecs {
-				pods = append(pods, spec.pod)
+				p := spec.pod.DeepCopy()
+				if spec.preCreatePodModificationFunc != nil {
+					spec.preCreatePodModificationFunc(p)
+				}
+				pods = append(pods, p)
 			}
 			e2epod.NewPodClient(f).CreateBatch(ctx, pods)
 		})
@@ -611,6 +794,13 @@ func runEvictionTest(f *framework.Framework, pressureTimeout time.Duration, expe
 
 			ginkgo.By("checking for the expected pod conditions for evicted pods")
 			verifyPodConditions(ctx, f, testSpecs)
+
+			ginkgo.By("running postPressureValidationFuncs()")
+			for _, spec := range testSpecs {
+				if spec.postPressureValidationFunc != nil {
+					spec.postPressureValidationFunc()
+				}
+			}
 
 			// We observe pressure from the API server.  The eviction manager observes pressure from the kubelet internal stats.
 			// This means the eviction manager will observe pressure before we will, creating a delay between when the eviction manager
@@ -937,14 +1127,12 @@ func logDiskMetrics(ctx context.Context) {
 	}
 }
 
-func logMemoryMetrics(ctx context.Context) {
-	summary, err := getNodeSummary(ctx)
-	if err != nil {
-		framework.Logf("Error getting summary: %v", err)
-		return
-	}
+func logMemoryMetricsWithSummary(ctx context.Context, summary *kubeletstatsv1alpha1.Summary) {
 	if summary.Node.Memory != nil && summary.Node.Memory.WorkingSetBytes != nil && summary.Node.Memory.AvailableBytes != nil {
 		framework.Logf("Node.Memory.WorkingSetBytes: %d, Node.Memory.AvailableBytes: %d", *summary.Node.Memory.WorkingSetBytes, *summary.Node.Memory.AvailableBytes)
+	}
+	if summary.Node.Swap != nil && summary.Node.Swap.SwapUsageBytes != nil && summary.Node.Swap.SwapAvailableBytes != nil {
+		framework.Logf("summary.Node.Swap.SwapUsageBytes: %d, summary.Node.Swap.SwapAvailableBytes: %d", *summary.Node.Swap.SwapUsageBytes, *summary.Node.Swap.SwapAvailableBytes)
 	}
 	for _, sysContainer := range summary.Node.SystemContainers {
 		if sysContainer.Name == kubeletstatsv1alpha1.SystemContainerPods && sysContainer.Memory != nil && sysContainer.Memory.WorkingSetBytes != nil && sysContainer.Memory.AvailableBytes != nil {
@@ -959,6 +1147,15 @@ func logMemoryMetrics(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func logMemoryMetrics(ctx context.Context) {
+	summary, err := getNodeSummary(ctx)
+	if err != nil {
+		framework.Logf("Error getting summary: %v", err)
+		return
+	}
+	logMemoryMetricsWithSummary(ctx, summary)
 }
 
 func logPidMetrics(ctx context.Context) {
