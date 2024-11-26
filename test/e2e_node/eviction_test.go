@@ -169,6 +169,64 @@ var _ = SIGDescribe("MemoryAllocatableEviction", framework.WithSlow(), framework
 	})
 })
 
+// MemoryAllocatableEviction tests that the node responds to node memory pressure by evicting only responsible pods.
+// Node memory pressure is only encountered because we reserve the majority of the node's capacity via kube-reserved.
+var _ = SIGDescribe("iholder MemoryAllocatableEviction", framework.WithSlow(), framework.WithSerial(), framework.WithDisruptive(), nodefeature.Eviction, func() {
+	f := framework.NewDefaultFramework("memory-allocatable-eviction-test")
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
+	expectedNodeCondition := v1.NodeMemoryPressure
+	expectedStarvedResource := v1.ResourceMemory
+	pressureTimeout := 10 * time.Minute
+
+	sleepingPod := getSleepingPod(f.Namespace.Name)
+	sleepingPod = runPodAndWaitUntilScheduled(f, sleepingPod)
+	if !isPodCgroupV2(f, sleepingPod) {
+		e2eskipper.Skipf("swap tests require cgroup v2")
+	}
+
+	gomega.Expect(isSwapFeatureGateEnabled()).To(gomega.BeTrueBecause("NodeSwap feature should be on"))
+	swapCapacity := getSwapCapacity(f, sleepingPod)
+	gomega.Expect(swapCapacity).NotTo(gomega.BeNil())
+	gomega.Expect(swapCapacity.IsZero()).To(gomega.BeFalseBecause("swap capacity is not supposed to be zero"))
+
+	nodeCapacity := getNodeCPUAndMemoryCapacity(context.Background(), f)
+
+	stressSize := swapCapacity.DeepCopy()
+	stressSize.Add(nodeCapacity[v1.ResourceMemory])
+
+	ginkgo.Context(fmt.Sprintf(testContextFmt, expectedNodeCondition), func() {
+		tempSetCurrentKubeletConfig(f, func(ctx context.Context, initialConfig *kubeletconfig.KubeletConfiguration) {
+			// Set large system and kube reserved values to trigger allocatable thresholds far before hard eviction thresholds.
+			kubeReserved := nodeCapacity[v1.ResourceMemory]
+			// The default hard eviction threshold is 250Mb, so Allocatable = Capacity - Reserved - 250Mb
+			// We want Allocatable = 50Mb, so set Reserved = Capacity - Allocatable - 250Mb = Capacity - 300Mb
+			kubeReserved.Sub(resource.MustParse("300Mi"))
+			initialConfig.KubeReserved = map[string]string{
+				string(v1.ResourceMemory): kubeReserved.String(),
+			}
+			initialConfig.EnforceNodeAllocatable = []string{kubetypes.NodeAllocatableEnforcementKey}
+			initialConfig.CgroupsPerQOS = true
+		})
+		runEvictionTest(f, pressureTimeout, expectedNodeCondition, expectedStarvedResource, logMemoryMetrics, []podEvictSpec{
+			{
+				evictionPriority: 1,
+				pod: getMemhogPod("memory-hog-pod", "memory-hog", v1.ResourceRequirements{
+					Requests: map[v1.ResourceName]resource.Quantity{
+						v1.ResourceMemory: resource.MustParse("1Mi"), // To make it Burstable
+					},
+					Limits: map[v1.ResourceName]resource.Quantity{
+						v1.ResourceMemory: stressSize, // To make it stress swap memory
+					},
+				}),
+			},
+			{
+				evictionPriority: 0,
+				pod:              innocentPod(),
+			},
+		})
+	})
+})
+
 // LocalStorageEviction tests that the node responds to node disk pressure by evicting only responsible pods
 // Disk pressure is induced by running pods which consume disk space.
 var _ = SIGDescribe("LocalStorageEviction", framework.WithSlow(), framework.WithSerial(), framework.WithDisruptive(), nodefeature.Eviction, func() {
