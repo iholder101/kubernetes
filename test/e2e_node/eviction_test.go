@@ -277,6 +277,15 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 			}
 			initialConfig.EnforceNodeAllocatable = []string{kubetypes.NodeAllocatableEnforcementKey}
 			initialConfig.CgroupsPerQOS = true
+
+			msg := "swap behavior is already set to LimitedSwap"
+
+			if swapBehavior := initialConfig.MemorySwap.SwapBehavior; swapBehavior != kubetypes.LimitedSwap {
+				initialConfig.MemorySwap.SwapBehavior = kubetypes.LimitedSwap
+				msg = "setting swap behavior to LimitedSwap"
+			}
+
+			ginkgo.By(msg)
 		})
 		runEvictionTest(f, pressureTimeout, expectedNodeCondition, expectedStarvedResource, logFunc, []podEvictSpec{
 			{
