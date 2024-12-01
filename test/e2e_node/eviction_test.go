@@ -199,10 +199,10 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 			framework.ExpectNoError(err)
 		}
 
-		if nodeCapacity == nil {
-			nodeCapacity = getNodeCPUAndMemoryCapacity(context.Background(), f)
-			gomega.Expect(nodeCapacity).NotTo(gomega.BeNil())
-		}
+		//if nodeCapacity == nil {
+		nodeCapacity = getNodeCPUAndMemoryCapacity(context.Background(), f)
+		gomega.Expect(nodeCapacity).NotTo(gomega.BeNil())
+		//}
 
 		const memoryPercentageRequested = 0.7
 		const memoryAndSwapPercentageLimit = 0.9
@@ -272,10 +272,10 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 				nodeCapacity = getNodeCPUAndMemoryCapacity(context.Background(), f)
 				gomega.Expect(nodeCapacity).NotTo(gomega.BeNil())
 			}
-			kubeReserved := nodeCapacity[v1.ResourceMemory]
-			// The default hard eviction threshold is 250Mb, so Allocatable = Capacity - Reserved - 250Mb
-			// We want Allocatable = 50Mb, so set Reserved = Capacity - Allocatable - 250Mb = Capacity - 300Mb
-			kubeReserved.Sub(resource.MustParse("300Mi"))
+			//kubeReserved := nodeCapacity[v1.ResourceMemory]
+			//// The default hard eviction threshold is 250Mb, so Allocatable = Capacity - Reserved - 250Mb
+			//// We want Allocatable = 50Mb, so set Reserved = Capacity - Allocatable - 250Mb = Capacity - 300Mb
+			kubeReserved := resource.MustParse("500Mi")
 			initialConfig.KubeReserved = map[string]string{
 				string(v1.ResourceMemory): kubeReserved.String(),
 			}
