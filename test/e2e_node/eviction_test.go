@@ -19,6 +19,7 @@ package e2enode
 import (
 	"context"
 	"fmt"
+	"k8s.io/kubernetes/pkg/util/slice"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -261,6 +262,37 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 		}
 	}
 
+	overrideArgsFunc := func(oldArgs []string) []string {
+		allocSleepIdx := -1
+		for allocSleepIdx = range oldArgs {
+			if oldArgs[allocSleepIdx] == "--mem-alloc-sleep" {
+				allocSleepIdx++
+				break
+			}
+		}
+
+		if allocSleepIdx == -1 {
+			panic("can't find --mem-alloc-sleep")
+		}
+
+		nodeTotalMemory := nodeCapacity[v1.ResourceMemory]
+		// This makes the stress much more reliable and dynamic w.r.t. the node's size.
+		// For 4Gi node we want sleep to be 10s, which equals to 10,000ms. We'll generalize this approach to
+		// fit also larger nodes.
+
+		const timeToFinishMinutes = 5
+		const timeToFinishMs = timeToFinishMinutes * 60 * 1000
+		numberOfAllocations := float64(nodeTotalMemory.Value()) / float64(12*1024*1024)
+		sleepMs := int64(float64(timeToFinishMs)/numberOfAllocations) + 1
+
+		framework.Logf("setting stress sleep to %dms", sleepMs)
+
+		newArgs := slice.CopyStrings(oldArgs)
+		newArgs[allocSleepIdx] = fmt.Sprintf("%dms", sleepMs)
+
+		return newArgs
+	}
+
 	ginkgo.Context(fmt.Sprintf(testContextFmt, expectedNodeCondition), func() {
 		tempSetCurrentKubeletConfig(f, func(ctx context.Context, initialConfig *kubeletconfig.KubeletConfiguration) {
 			// Set large system and kube reserved values to trigger allocatable thresholds far before hard eviction thresholds.
@@ -293,6 +325,7 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 				pod:                        getMemhogPod("memory-hog-pod", "memory-hog", v1.ResourceRequirements{}),
 				overridePodResourcesFunc:   calcStressSize,
 				postPressureValidationFunc: postPressureValidationFunc,
+				overrideArgs:               overrideArgsFunc,
 			},
 			{
 				evictionPriority: 0,
@@ -688,6 +721,7 @@ type podEvictSpec struct {
 	evictionSoftGracePeriod    int
 	overridePodResourcesFunc   func() *v1.ResourceRequirements
 	postPressureValidationFunc func()
+	overrideArgs               func(oldArgs []string) []string
 }
 
 // runEvictionTest sets up a testing environment given the provided pods, and checks a few things:
@@ -718,6 +752,10 @@ func runEvictionTest(f *framework.Framework, pressureTimeout time.Duration, expe
 					gomega.Expect(res.Limits.Memory()).ToNot(gomega.BeNil())
 					ginkgo.By(fmt.Sprintf("setting limit of %v to pod %s", res.Limits.Memory().String(), p.Name))
 					p.Spec.Containers[0].Resources = *res
+				}
+				if spec.overrideArgs != nil {
+					newArgs := spec.overrideArgs(p.Spec.Containers[0].Args)
+					p.Spec.Containers[0].Args = newArgs
 				}
 				pods = append(pods, p)
 			}
