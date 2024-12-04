@@ -211,6 +211,7 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 
 		stressSize := swapCapacity.DeepCopy()
 		stressSize.Add(memoryCapacity)
+		stressSize.Sub(resource.MustParse("700Mi"))
 
 		ginkgo.By(fmt.Sprintf("DEBUG: memoryCapacity=%s, swapCapacity=%s, stressSize=%s", memoryCapacity.String(), swapCapacity.String(), stressSize.String()))
 		ginkgo.By(fmt.Sprintf("DEBUG: memRequest=%s, memLimits=%s", memRequest.String(), stressSize.String()))
