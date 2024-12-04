@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"k8s.io/kubernetes/pkg/util/slice"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -260,6 +261,17 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 		if isNewMax {
 			swapUsageBytes = *summary.Node.Swap.SwapUsageBytes
 		}
+
+		cmd := exec.Command("free", "-h")
+
+		// Get the output of the command
+		output, err := cmd.Output()
+		if err != nil {
+			framework.Logf("Error executing command: %v", err)
+			return
+		}
+
+		framework.Logf("DEBUG free -h output:\n" + string(output))
 	}
 
 	overrideArgsFunc := func(oldArgs []string, memLimit *resource.Quantity) []string {
