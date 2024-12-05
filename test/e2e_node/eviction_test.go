@@ -19,6 +19,7 @@ package e2enode
 import (
 	"context"
 	"fmt"
+	"k8s.io/kubernetes/pkg/util/slice"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -265,6 +266,32 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 		}
 	}
 
+	overrideArgsFunc := func(oldArgs []string, memLimit *resource.Quantity) []string {
+		gomega.Expect(memLimit).NotTo(gomega.BeNil())
+		gomega.Expect(memLimit.IsZero()).To(gomega.BeFalseBecause("mem limit shouldn't be zero"))
+
+		memTotalValueIdx := -1
+		for memTotalValueIdx = range oldArgs {
+			if oldArgs[memTotalValueIdx] == "--mem-total" {
+				memTotalValueIdx++
+				break
+			}
+		}
+
+		if memTotalValueIdx == -1 {
+			panic("can't find --mem-total")
+		}
+
+		stressSize := strconv.Itoa(int(float64(memLimit.Value()) * 0.8))
+
+		newArgs := slice.CopyStrings(oldArgs)
+		newArgs[memTotalValueIdx] = stressSize
+
+		framework.Logf("Overriding pod args: %v", newArgs)
+
+		return newArgs
+	}
+
 	ginkgo.Context(fmt.Sprintf(testContextFmt, expectedNodeCondition), func() {
 		tempSetCurrentKubeletConfig(f, func(ctx context.Context, initialConfig *kubeletconfig.KubeletConfiguration) {
 			// Set large system and kube reserved values to trigger allocatable thresholds far before hard eviction thresholds.
@@ -297,6 +324,7 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 				pod:                        getMemhogPod("memory-hog-pod", "memory-hog", v1.ResourceRequirements{}),
 				overrideResources:          overrideResources,
 				postPressureValidationFunc: postPressureValidationFunc,
+				overrideArgs:               overrideArgsFunc,
 			},
 			{
 				evictionPriority: 0,
@@ -692,6 +720,7 @@ type podEvictSpec struct {
 	evictionSoftGracePeriod    int
 	overrideResources          func() *v1.ResourceRequirements
 	postPressureValidationFunc func()
+	overrideArgs               func(oldArgs []string, memoryLimit *resource.Quantity) []string
 }
 
 // runEvictionTest sets up a testing environment given the provided pods, and checks a few things:
@@ -722,6 +751,10 @@ func runEvictionTest(f *framework.Framework, pressureTimeout time.Duration, expe
 					gomega.Expect(res.Limits.Memory()).ToNot(gomega.BeNil())
 					ginkgo.By(fmt.Sprintf("setting limit of %v to pod %s", res.Limits.Memory().String(), p.Name))
 					p.Spec.Containers[0].Resources = *res
+				}
+				if spec.overrideArgs != nil {
+					newArgs := spec.overrideArgs(p.Spec.Containers[0].Args, p.Spec.Containers[0].Resources.Limits.Memory())
+					p.Spec.Containers[0].Args = newArgs
 				}
 				pods = append(pods, p)
 			}
