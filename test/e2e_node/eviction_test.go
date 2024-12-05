@@ -270,14 +270,20 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 		gomega.Expect(memLimit).NotTo(gomega.BeNil())
 		gomega.Expect(memLimit.IsZero()).To(gomega.BeFalseBecause("mem limit shouldn't be zero"))
 
-		memTotalValueIdx := -1
-		for memTotalValueIdx = range oldArgs {
-			if oldArgs[memTotalValueIdx] == "--mem-total" {
-				memTotalValueIdx++
-				break
+		findValueIdx := func(argument string) int {
+			memTotalValueIdx := -1
+
+			for memTotalValueIdx = range oldArgs {
+				if oldArgs[memTotalValueIdx] == argument {
+					memTotalValueIdx++
+					break
+				}
 			}
+
+			return memTotalValueIdx
 		}
 
+		memTotalValueIdx := findValueIdx("--mem-total")
 		if memTotalValueIdx == -1 {
 			panic("can't find --mem-total")
 		}
@@ -287,8 +293,23 @@ var _ = SIGDescribe("iholder MemoryAllocatableEvictionWithSwap", framework.WithS
 		newArgs := slice.CopyStrings(oldArgs)
 		newArgs[memTotalValueIdx] = stressSize
 
-		framework.Logf("Overriding pod args: %v", newArgs)
+		// This makes the stress much more reliable and dynamic w.r.t. the node's size.
+		// For 4Gi node we want sleep to be 10s, which equals to 10,000ms. We'll generalize this approach to
+		// fit also larger nodes.
 
+		allocSleepIdx := findValueIdx("--mem-alloc-sleep")
+		if allocSleepIdx == -1 {
+			panic("can't find --mem-alloc-sleep")
+		}
+
+		const timeToFinishMinutes = 10
+		const timeToFinishMs = timeToFinishMinutes * 60 * 1000
+		numberOfAllocations := (float64(memLimit.Value()) * 0.8) / float64(12*1024*1024)
+		sleepMs := int64(float64(timeToFinishMs)/numberOfAllocations) + 1
+
+		newArgs[allocSleepIdx] = fmt.Sprintf("%dms", sleepMs)
+
+		framework.Logf("Overriding pod args: %v", newArgs)
 		return newArgs
 	}
 
