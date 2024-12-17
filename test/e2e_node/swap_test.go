@@ -299,6 +299,8 @@ var _ = SIGDescribe("iholder SwapEviction", "[LinuxOnly]", framework.WithSerial(
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 	expectedNodeCondition := v1.NodeMemoryPressure
 	expectedStarvedResource := v1.ResourceMemory
+	fastStressSize := resource.MustParse("6Gi")
+	var fastStressBuffer [][]byte
 	pressureTimeout := 17 * time.Minute
 
 	var swapCapacity *resource.Quantity
@@ -377,7 +379,10 @@ var _ = SIGDescribe("iholder SwapEviction", "[LinuxOnly]", framework.WithSerial(
 			newArgs[valueIdx] = newValue
 		}
 
-		stressSize := strconv.Itoa(int(float64(memLimit.Value()) * 0.8))
+		slowStressSize := resource.NewQuantity(int64(float64(memLimit.Value())*0.8), memLimit.Format)
+		slowStressSize.Sub(fastStressSize)
+
+		stressSize := strconv.Itoa(int(slowStressSize.Value()))
 		replaceArgValue("--mem-total", stressSize)
 		replaceArgValue("--mem-alloc-size", "64Mi")
 		replaceArgValue("--mem-alloc-sleep", "7s")
@@ -454,6 +459,19 @@ var _ = SIGDescribe("iholder SwapEviction", "[LinuxOnly]", framework.WithSerial(
 
 			ginkgo.By(msg)
 		})
+
+		ginkgo.BeforeEach(func() {
+			stepSize := resource.MustParse("512Mi")
+			for i := int64(1); i*stepSize.Value() <= fastStressSize.Value(); i++ {
+				newBuffer := make([]byte, stepSize.Value())
+				for i := range newBuffer {
+					newBuffer[i] = 0
+				}
+				fastStressBuffer = append(fastStressBuffer, newBuffer)
+				time.Sleep(500 * time.Millisecond)
+			}
+		})
+
 		runEvictionTest(f, pressureTimeout, expectedNodeCondition, expectedStarvedResource, logFunc, []podEvictSpec{
 			{
 				evictionPriority:             1,
