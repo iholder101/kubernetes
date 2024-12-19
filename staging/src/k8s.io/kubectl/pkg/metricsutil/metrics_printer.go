@@ -32,8 +32,8 @@ var (
 		v1.ResourceCPU,
 		v1.ResourceMemory,
 	}
-	NodeColumns     = []string{"NAME", "CPU(cores)", "CPU(%)", "MEMORY(bytes)", "MEMORY(%)"}
-	PodColumns      = []string{"NAME", "CPU(cores)", "MEMORY(bytes)"}
+	NodeColumns     = []string{"NAME", "CPU(cores)", "CPU(%)", "MEMORY(bytes)", "MEMORY(%)", "SWAP(bytes)", "SWAP(%)"}
+	PodColumns      = []string{"NAME", "CPU(cores)", "MEMORY(bytes)", "SWAP(bytes)"}
 	NamespaceColumn = "NAMESPACE"
 	PodColumn       = "POD"
 )
@@ -210,7 +210,7 @@ func printSingleResourceUsage(out io.Writer, resourceType v1.ResourceName, quant
 	switch resourceType {
 	case v1.ResourceCPU:
 		fmt.Fprintf(out, "%vm", quantity.MilliValue())
-	case v1.ResourceMemory:
+	case v1.ResourceMemory, "swap":
 		fmt.Fprintf(out, "%vMi", quantity.Value()/(1024*1024))
 	default:
 		fmt.Fprintf(out, "%v", quantity.Value())
