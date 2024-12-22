@@ -18,8 +18,11 @@ package top
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"github.com/onsi/ginkgo/v2"
 	"io"
+	pointer "k8s.io/utils/ptr"
 	"net/http"
 	"reflect"
 	"strings"
@@ -423,4 +426,83 @@ func TestTopNodeWithSortByMemoryMetricsFrom(t *testing.T) {
 		t.Errorf("kinds not matching:\n\texpectedKinds: %v\n\tgotKinds: %v\n", expectedNodesNames, resultNodes)
 	}
 
+}
+
+func TestTopNodeWithSwap(t *testing.T) {
+	cmdtesting.InitTestErrorHandler(t)
+	expectedMetrics, nodes := testNodeV1beta1MetricsData()
+	expectedNodePath := fmt.Sprintf("/%s/%s/nodes", apiPrefix, apiVersion)
+
+	tf := cmdtesting.NewTestFactory().WithNamespace("test")
+	defer tf.Cleanup()
+
+	codec := scheme.Codecs.LegacyCodec(scheme.Scheme.PrioritizedVersionsAllGroups()...)
+	ns := scheme.Codecs.WithoutConversion()
+
+	stubSummary := Summary{
+		Node: NodeStats{
+			NodeName: nodes.Items[0].Name,
+			Swap: &SwapStats{
+				SwapAvailableBytes: pointer.To(uint64(5 * (1024 * 1024))),
+				SwapUsageBytes:     pointer.To(uint64(0)),
+			},
+		},
+	}
+	summaryBytes, err := json.Marshal(stubSummary)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tf.Client = &fake.RESTClient{
+		NegotiatedSerializer: ns,
+		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
+			switch p, m := req.URL.Path, req.Method; {
+			case p == "/api":
+				return &http.Response{StatusCode: http.StatusOK, Header: cmdtesting.DefaultHeader(), Body: io.NopCloser(bytes.NewReader([]byte(apibody)))}, nil
+			case p == "/apis":
+				return &http.Response{StatusCode: http.StatusOK, Header: cmdtesting.DefaultHeader(), Body: io.NopCloser(bytes.NewReader([]byte(apisbodyWithMetrics)))}, nil
+			case p == expectedNodePath && m == "GET":
+				return &http.Response{StatusCode: http.StatusOK, Header: cmdtesting.DefaultHeader(), Body: cmdtesting.ObjBody(codec, nodes)}, nil
+			case strings.Contains(p, "proxy/stats/summary") && m == "GET":
+				return &http.Response{StatusCode: http.StatusOK, Header: cmdtesting.DefaultHeader(), Body: cmdtesting.BytesBody(summaryBytes)}, nil
+			default:
+				t.Fatalf("unexpected request: %#v\nGot URL: %#v\n", req, req.URL)
+				return nil, nil
+			}
+		}),
+	}
+	fakemetricsClientset := &metricsfake.Clientset{}
+	fakemetricsClientset.AddReactor("list", "nodes", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+		return true, expectedMetrics, nil
+	})
+	tf.ClientConfigVal = cmdtesting.DefaultClientConfig()
+	streams, _, buf, _ := genericiooptions.NewTestIOStreams()
+
+	cmd := NewCmdTopNode(tf, nil, streams)
+
+	// TODO in the long run, we want to test most of our commands like this. Wire the options struct with specific mocks
+	// TODO then check the particular Run functionality and harvest results from fake clients
+	cmdOptions := &TopNodeOptions{
+		IOStreams: streams,
+		ShowSwap:  true,
+	}
+	if err := cmdOptions.Complete(tf, cmd, []string{}); err != nil {
+		t.Fatal(err)
+	}
+	cmdOptions.MetricsClient = fakemetricsClientset
+	if err := cmdOptions.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdOptions.RunTopNode(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check the presence of node names in the output.
+	result := buf.String()
+	fmt.Fprintln(ginkgo.GinkgoWriter, result)
+	for _, m := range expectedMetrics.Items {
+		if !strings.Contains(result, m.Name) {
+			t.Errorf("missing metrics for %s: \n%s", m.Name, result)
+		}
+	}
 }
