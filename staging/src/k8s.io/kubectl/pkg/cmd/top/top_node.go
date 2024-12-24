@@ -222,6 +222,7 @@ func (o TopNodeOptions) RunTopNode() error {
 			}
 
 			availableSwap := *summary.Node.Swap.SwapAvailableBytes + *summary.Node.Swap.SwapUsageBytes
+			fmt.Printf("availableSwap: %d\n", availableSwap)
 			availableResources[n.Name]["swap"] = *resource.NewQuantity(int64(availableSwap), resource.DecimalSI)
 		}
 	}

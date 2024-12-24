@@ -19,13 +19,12 @@ package metricsutil
 import (
 	"fmt"
 	"io"
-	"slices"
-	"sort"
-
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/cli-runtime/pkg/printers"
 	metricsapi "k8s.io/metrics/pkg/apis/metrics"
+	"slices"
+	"sort"
 )
 
 var (
@@ -97,6 +96,7 @@ func (printer *TopCmdPrinter) PrintNodeMetrics(metrics []metricsapi.NodeMetrics,
 			metricInfo.Metrics["swap capacity"] = availableResources[m.Name]["swap"]
 		}
 
+		fmt.Printf("print: %d\n", m.Name)
 		printer.printMetricsLine(w, metricInfo)
 		delete(availableResources, m.Name)
 	}
@@ -237,6 +237,9 @@ func printSingleResourceUsage(out io.Writer, resourceType v1.ResourceName, quant
 	case v1.ResourceCPU:
 		fmt.Fprintf(out, "%vm", quantity.MilliValue())
 	case v1.ResourceMemory, "swap", "swap capacity":
+		if string(resourceType) == "swap" {
+			fmt.Printf("swap quantity: %d\n", quantity.Value())
+		}
 		fmt.Fprintf(out, "%vMi", quantity.Value()/(1024*1024))
 	default:
 		fmt.Fprintf(out, "%v", quantity.Value())
