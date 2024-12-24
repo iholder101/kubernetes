@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
 	"github.com/spf13/cobra"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -35,7 +34,6 @@ import (
 	"k8s.io/kubectl/pkg/util/completion"
 	"k8s.io/kubectl/pkg/util/i18n"
 	"k8s.io/kubectl/pkg/util/templates"
-	statsapi "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
 	metricsapi "k8s.io/metrics/pkg/apis/metrics"
 	metricsV1beta1api "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
@@ -250,7 +248,7 @@ func getNodeSwapCapacity(nodeClient corev1client.CoreV1Interface, nodeName strin
 		return nil, fmt.Errorf("failed to get node summary: %w", err)
 	}
 
-	summary := statsapi.Summary{}
+	summary := Summary{}
 	err = json.Unmarshal(summaryBytes, &summary)
 	if err != nil {
 		return nil, err
