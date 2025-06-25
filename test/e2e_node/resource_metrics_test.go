@@ -68,7 +68,7 @@ var _ = SIGDescribe("ResourceMetricsAPI", feature.ResourceMetrics, func() {
 			// by CRI-O and Containerd
 			if !e2eskipper.IsFeatureGateEnabled(features.PodAndContainerStatsFromCRI) {
 				keys = append(keys, "container_cpu_usage_seconds_total", "container_memory_working_set_bytes", "container_start_time_seconds")
-			}
+		}
 
 			zeroSampe := boundedSample(0, 0)
 
